@@ -1,0 +1,8 @@
+streamlit>=1.35.0
+requests
+pandas
+geopandas
+fiona
+shapely
+pyproj
+matplotlib

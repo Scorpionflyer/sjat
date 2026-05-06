@@ -4,101 +4,205 @@ from io import StringIO
 import json
 import geopandas as gpd
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import streamlit as st
 
+# ── Page config ──────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Loomulik iive Eestis",
+    page_icon="🗺️",
+    layout="wide",
+)
+
+# ── Constants ─────────────────────────────────────────────────────────────────
 STATISTIKAAMETI_API_URL = "https://andmed.stat.ee/api/v1/et/stat/RV032"
+GEOJSON_PATH = "maakonnad.geojson"
 
-JSON_PAYLOAD_STR =""" {
-  "query": [
-    {
-      "code": "Aasta",
-      "selection": {
-        "filter": "item",
-        "values": [
-          "2014",
-          "2015",
-          "2016",
-          "2017",
-          "2018",
-          "2019",
-          "2020",
-          "2021",
-          "2022",
-          "2023"
-        ]
-      }
-    },
-    {
-      "code": "Maakond",
-      "selection": {
-        "filter": "item",
-        "values": [
-          "39",
-          "44",
-          "49",
-          "51",
-          "57",
-          "59",
-          "65",
-          "67",
-          "70",
-          "74",
-          "78",
-          "82",
-          "84",
-          "86",
-          "37"
-        ]
-      }
-    },
-    {
-      "code": "Sugu",
-      "selection": {
-        "filter": "item",
-        "values": [
-          "2",
-          "3"
-        ]
-      }
-    }
-  ],
-  "response": {
-    "format": "csv"
-  }
+JSON_PAYLOAD = {
+    "query": [
+        {
+            "code": "Aasta",
+            "selection": {
+                "filter": "item",
+                "values": ["2014","2015","2016","2017","2018","2019","2020","2021","2022","2023"],
+            },
+        },
+        {
+            "code": "Maakond",
+            "selection": {
+                "filter": "item",
+                "values": ["39","44","49","51","57","59","65","67","70","74","78","82","84","86","37"],
+            },
+        },
+        {
+            "code": "Sugu",
+            "selection": {"filter": "item", "values": ["2", "3"]},
+        },
+    ],
+    "response": {"format": "csv"},
 }
-"""
-geojson = "maakonnad.geojson"
 
-def import_data():
-    headers = {
-        'Content-Type': 'application/json'
-    }
-    parsed_payload = json.loads(JSON_PAYLOAD_STR)
-    response = requests.post(STATISTIKAAMETI_API_URL, json=parsed_payload, headers=headers)
-    if response.status_code == 200:
-        print("Request successful.")
-        text = response.content.decode('utf-8-sig')
-        df = pd.read_csv(StringIO(text))
+SUGU_LABELS = {"Mehed": "Mehed", "Naised": "Naised"}
+
+# ── Data loading (cached) ─────────────────────────────────────────────────────
+@st.cache_data(show_spinner="Laen andmeid Statistikaametist…")
+def load_statistics() -> pd.DataFrame:
+    response = requests.post(
+        STATISTIKAAMETI_API_URL,
+        json=JSON_PAYLOAD,
+        headers={"Content-Type": "application/json"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    text = response.content.decode("utf-8-sig")
+    return pd.read_csv(StringIO(text))
+
+
+@st.cache_data(show_spinner="Laen kaardiandmeid…")
+def load_geodata() -> gpd.GeoDataFrame:
+    return gpd.read_file(GEOJSON_PATH)
+
+
+def merge_data(gdf: gpd.GeoDataFrame, df: pd.DataFrame, year: int, sugu: str) -> gpd.GeoDataFrame:
+    """Filter stats by year & sex, then join onto the GeoDataFrame."""
+    subset = df[(df["Aasta"] == year) & (df["Sugu"] == sugu)].copy()
+
+    # Try to find the name column in the GeoJSON automatically
+    name_col = None
+    for col in gdf.columns:
+        if col.upper() in ("MNIMI", "NAME", "NIMI", "MAAKOND", "NAME_1"):
+            name_col = col
+            break
+    if name_col is None:
+        # fall back to first non-geometry string column
+        name_col = [c for c in gdf.columns if c != "geometry"][0]
+
+    merged = gdf.merge(subset, left_on=name_col, right_on="Maakond", how="left")
+    return merged
+
+
+# ── Plot ──────────────────────────────────────────────────────────────────────
+def make_choropleth(merged: gpd.GeoDataFrame, year: int, sugu: str) -> plt.Figure:
+    col = "Loomulik iive"
+
+    vmin = merged[col].min()
+    vmax = merged[col].max()
+    # Use a diverging colormap centred at 0 if range crosses zero
+    if vmin < 0 < vmax:
+        cmap = "RdYlGn"
+        norm = mcolors.TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
     else:
-        print(f"Failed with status code: {response.status_code}")
-        print(response.text)
-    return df
+        cmap = "YlGn" if vmin >= 0 else "OrRd_r"
+        norm = None
 
-def import_geojson():
-    gdf = gpd.read_file(geojson)
-    return gdf
+    fig, ax = plt.subplots(figsize=(11, 8))
+    fig.patch.set_facecolor("#0e1117")
+    ax.set_facecolor("#0e1117")
 
-def get_data_for_year(df, year):
-    year_data = df[df.Aasta==year]
-    return year_data
+    merged.plot(
+        column=col,
+        ax=ax,
+        legend=True,
+        cmap=cmap,
+        norm=norm,
+        edgecolor="#333333",
+        linewidth=0.6,
+        missing_kwds={"color": "#2a2a2a", "label": "Andmed puuduvad"},
+        legend_kwds={
+            "label": col,
+            "orientation": "horizontal",
+            "shrink": 0.6,
+            "pad": 0.02,
+        },
+    )
 
-def plot(df):
-    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
-    df.plot(column='Loomulik iive',
-                     ax=ax,
-                     legend=True,
-                     cmap='viridis',
-                     legend_kwds={'label': "Loomulik iive"})
-    plt.title('Loomulik iive maakonniti')
-    plt.axis('off')
+    # County labels
+    for _, row in merged.iterrows():
+        if row.geometry is None:
+            continue
+        centroid = row.geometry.centroid
+        name = row.get("Maakond", "")
+        value = row.get(col, None)
+        if pd.notna(value):
+            ax.annotate(
+                f"{name}\n{int(value):+}",
+                xy=(centroid.x, centroid.y),
+                ha="center",
+                va="center",
+                fontsize=6.5,
+                color="white",
+                fontweight="bold",
+            )
+
+    ax.set_title(
+        f"Loomulik iive maakonniti — {year} ({sugu})",
+        fontsize=15,
+        color="white",
+        pad=14,
+    )
+    ax.axis("off")
+
+    # Style the colorbar
+    for text in ax.get_figure().findobj(plt.Text):
+        text.set_color("white")
+    cb = [a for a in fig.axes if a is not ax]
+    for cba in cb:
+        cba.tick_params(colors="white", labelsize=8)
+        plt.setp(plt.getp(cba, "xticklabels"), color="white")
+        cba.set_facecolor("#0e1117")
+
     plt.tight_layout()
-    plt.show()
+    return fig
+
+
+# ── UI ────────────────────────────────────────────────────────────────────────
+st.title("🗺️ Loomulik iive Eestis")
+st.caption("Andmeallikas: Statistikaamet · RV032")
+
+# Sidebar controls
+with st.sidebar:
+    st.header("Filtrid")
+
+    year = st.slider("Aasta", min_value=2014, max_value=2023, value=2023, step=1)
+
+    sugu = st.radio("Sugu", options=["Mehed", "Naised"], index=0)
+
+    st.divider()
+    show_table = st.checkbox("Näita andmetabelit", value=False)
+
+# Load data
+try:
+    df = load_statistics()
+    gdf = load_geodata()
+except requests.HTTPError as e:
+    st.error(f"API päring ebaõnnestus: {e}")
+    st.stop()
+except Exception as e:
+    st.error(f"Viga andmete laadimisel: {e}")
+    st.stop()
+
+# Merge & plot
+merged = merge_data(gdf, df, year, sugu)
+
+col1, col2, col3 = st.columns(3)
+total = merged["Loomulik iive"].sum()
+positive = (merged["Loomulik iive"] > 0).sum()
+negative = (merged["Loomulik iive"] < 0).sum()
+col1.metric("Kokku (kõik maakonnad)", f"{int(total):+}")
+col2.metric("Positiivne iive", f"{positive} maakonda")
+col3.metric("Negatiivne iive", f"{negative} maakonda")
+
+st.divider()
+
+fig = make_choropleth(merged, year, sugu)
+st.pyplot(fig, use_container_width=True)
+
+if show_table:
+    st.subheader("Andmetabel")
+    table = (
+        merged[["Maakond", "Loomulik iive"]]
+        .dropna()
+        .sort_values("Loomulik iive", ascending=False)
+        .reset_index(drop=True)
+    )
+    st.dataframe(table, use_container_width=True, height=460)

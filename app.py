@@ -16,7 +16,7 @@ st.set_page_config(
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 STATISTIKAAMETI_API_URL = "https://andmed.stat.ee/api/v1/et/stat/RV032"
-GEOJSON_PATH = "maakonnad.geojson"
+GEOJSON_URL = "https://raw.githubusercontent.com/buildig/EHAK/master/geojson/maakond.geojson"
 
 JSON_PAYLOAD = {
     "query": [
@@ -60,24 +60,42 @@ def load_statistics() -> pd.DataFrame:
 
 @st.cache_data(show_spinner="Laen kaardiandmeid…")
 def load_geodata() -> gpd.GeoDataFrame:
-    return gpd.read_file(GEOJSON_PATH)
+    resp = requests.get(GEOJSON_URL, timeout=30)
+    resp.raise_for_status()
+    import io
+    return gpd.read_file(io.StringIO(resp.text))
+
+
+def normalize_name(name: str) -> str:
+    """Lowercase and strip common suffixes for fuzzy county name matching."""
+    return str(name).lower().replace(" maakond", "").replace("maa", "").strip()
 
 
 def merge_data(gdf: gpd.GeoDataFrame, df: pd.DataFrame, year: int, sugu: str) -> gpd.GeoDataFrame:
     """Filter stats by year & sex, then join onto the GeoDataFrame."""
     subset = df[(df["Aasta"] == year) & (df["Sugu"] == sugu)].copy()
 
-    # Try to find the name column in the GeoJSON automatically
-    name_col = None
-    for col in gdf.columns:
-        if col.upper() in ("MNIMI", "NAME", "NIMI", "MAAKOND", "NAME_1"):
-            name_col = col
-            break
-    if name_col is None:
-        # fall back to first non-geometry string column
-        name_col = [c for c in gdf.columns if c != "geometry"][0]
+    # EHAK GeoJSON uses MNIMI for county name
+    name_col = "MNIMI" if "MNIMI" in gdf.columns else next(
+        (c for c in gdf.columns if c != "geometry"), gdf.columns[0]
+    )
 
-    merged = gdf.merge(subset, left_on=name_col, right_on="Maakond", how="left")
+    # Dissolve to county level if GeoJSON has municipality-level rows
+    if "MKOOD" in gdf.columns:
+        geo_counties = gdf.dissolve(by=name_col).reset_index()
+    else:
+        geo_counties = gdf.copy()
+
+    # Normalised join to handle "Harju maakond" vs "Harjumaa" etc.
+    geo_counties = geo_counties.copy()
+    geo_counties["_key"] = geo_counties[name_col].apply(normalize_name)
+    subset = subset.copy()
+    subset["_key"] = subset["Maakond"].apply(normalize_name)
+
+    merged = geo_counties.merge(
+        subset[["_key", "Maakond", "Loomulik iive"]], on="_key", how="left"
+    )
+    merged.drop(columns=["_key"], inplace=True)
     return merged
 
 

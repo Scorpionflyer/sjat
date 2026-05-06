@@ -53,56 +53,20 @@ def load_geodata() -> gpd.GeoDataFrame:
     return gpd.read_file(io.StringIO(resp.text))
 
 
-# ── Column name resolution ────────────────────────────────────────────────────
-_COL_ALIASES = {
-    "Aasta":         ["Aasta", "aasta", "AASTA", "Year", "year"],
-    "Maakond":       ["Maakond", "maakond", "MAAKOND", "County", "county"],
-    "Sugu":          ["Sugu", "sugu", "SUGU", "Sex", "sex"],
-    "Loomulik iive": ["Loomulik iive", "Loomulik iive kokku", "Natural increase"],
-}
-
-def resolve_col(df: pd.DataFrame, candidates: list) -> str:
-    for c in candidates:
-        if c in df.columns:
-            return c
-    raise KeyError(f"None of {candidates} found in columns: {list(df.columns)}")
-
-
 # ── Merge ─────────────────────────────────────────────────────────────────────
-def normalize_name(name: str) -> str:
-    return str(name).lower().replace(" maakond", "").replace("maa", "").strip()
-
-
 def merge_data(gdf: gpd.GeoDataFrame, df: pd.DataFrame, year: int, sugu: str) -> gpd.GeoDataFrame:
-    col_aasta   = resolve_col(df, _COL_ALIASES["Aasta"])
-    col_sugu    = resolve_col(df, _COL_ALIASES["Sugu"])
-    col_maakond = resolve_col(df, _COL_ALIASES["Maakond"])
-    col_iive    = resolve_col(df, _COL_ALIASES["Loomulik iive"])
+    # API returns wide format: sex is encoded in column names, not a separate column
+    # e.g. "Mehed Loomulik iive" / "Naised Loomulik iive"
+    iive_col = f"{sugu} Loomulik iive"
 
-    # Year may be stored as string in the CSV
-    year_val = str(year) if df[col_aasta].dtype == object else year
+    year_val = str(year) if df["Aasta"].dtype == object else year
+    subset = df[df["Aasta"] == year_val][["Maakond", iive_col]].copy()
+    subset = subset.rename(columns={iive_col: "Loomulik iive"})
 
-    subset = df[(df[col_aasta] == year_val) & (df[col_sugu] == sugu)].copy()
-    subset = subset.rename(columns={col_maakond: "Maakond", col_iive: "Loomulik iive"})
+    # MNIMI in GeoJSON matches "Harju maakond" format exactly — direct join
+    geo = gdf.dissolve(by="MNIMI").reset_index() if "MKOOD" in gdf.columns else gdf.copy()
 
-    # EHAK / nutiteq GeoJSON county name column
-    name_col = next(
-        (c for c in ("MNIMI", "NIMI", "NAME", "maakond") if c in gdf.columns),
-        [c for c in gdf.columns if c != "geometry"][0],
-    )
-
-    # Dissolve to county level if geometry has sub-county rows
-    if "MKOOD" in gdf.columns:
-        geo = gdf.dissolve(by=name_col).reset_index()
-    else:
-        geo = gdf.copy()
-
-    geo = geo.copy()
-    geo["_key"]    = geo[name_col].apply(normalize_name)
-    subset["_key"] = subset["Maakond"].apply(normalize_name)
-
-    merged = geo.merge(subset[["_key", "Maakond", "Loomulik iive"]], on="_key", how="left")
-    merged.drop(columns=["_key"], inplace=True)
+    merged = geo.merge(subset, left_on="MNIMI", right_on="Maakond", how="left")
     return merged
 
 

@@ -128,7 +128,7 @@ st.caption("Andmeallikas: Statistikaamet · RV032")
 
 with st.sidebar:
     st.header("Filtrid")
-    year = st.slider("Aasta", min_value=2014, max_value=2023, value=2023, step=1)
+    year = st.sidebar.selectbox("Aasta", options=list(range(2014, 2024)), index=9)
     sugu = st.radio("Sugu", options=["Mehed", "Naised"], index=0)
     st.divider()
     show_table = st.checkbox("Näita andmetabelit", value=False)

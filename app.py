@@ -57,11 +57,14 @@ def load_geodata() -> gpd.GeoDataFrame:
 def merge_data(gdf: gpd.GeoDataFrame, df: pd.DataFrame, year: int, sugu: str) -> gpd.GeoDataFrame:
     # API returns wide format: sex is encoded in column names, not a separate column
     # e.g. "Mehed Loomulik iive" / "Naised Loomulik iive"
-    iive_col = f"{sugu} Loomulik iive"
-
     year_val = str(year) if df["Aasta"].dtype == object else year
-    subset = df[df["Aasta"] == year_val][["Maakond", iive_col]].copy()
-    subset = subset.rename(columns={iive_col: "Loomulik iive"})
+    subset = df[df["Aasta"] == year_val][["Maakond", "Mehed Loomulik iive", "Naised Loomulik iive"]].copy()
+
+    if sugu == "Mõlemad":
+        subset["Loomulik iive"] = subset["Mehed Loomulik iive"] + subset["Naised Loomulik iive"]
+    else:
+        subset["Loomulik iive"] = subset[f"{sugu} Loomulik iive"]
+    subset = subset[["Maakond", "Loomulik iive"]]
 
     # MNIMI in GeoJSON matches "Harju maakond" format exactly — direct join
     geo = gdf.dissolve(by="MNIMI").reset_index() if "MKOOD" in gdf.columns else gdf.copy()
@@ -129,7 +132,7 @@ st.caption("Andmeallikas: Statistikaamet · RV032")
 with st.sidebar:
     st.header("Filtrid")
     year = st.sidebar.selectbox("Aasta", options=list(range(2014, 2024)), index=9)
-    sugu = st.radio("Sugu", options=["Mehed", "Naised"], index=0)
+    sugu = st.radio("Sugu", options=["Mõlemad", "Mehed", "Naised"], index=0)
     st.divider()
     show_table = st.checkbox("Näita andmetabelit", value=False)
     show_debug = st.checkbox("Silumine", value=False)

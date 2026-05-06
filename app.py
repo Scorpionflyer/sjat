@@ -16,7 +16,7 @@ st.set_page_config(
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 STATISTIKAAMETI_API_URL = "https://andmed.stat.ee/api/v1/et/stat/RV032"
-GEOJSON_URL = "https://raw.githubusercontent.com/buildig/EHAK/master/geojson/maakond.geojson"
+GEOJSON_URL = "https://gist.githubusercontent.com/nutiteq/1ab8f24f9a6ad2bb47da/raw/b89bfd350842b662099131e442488eeac453f8e5/maakonnad.geojson"
 
 JSON_PAYLOAD = {
     "query": [
